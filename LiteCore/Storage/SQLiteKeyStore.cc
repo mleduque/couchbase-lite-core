@@ -143,20 +143,33 @@ namespace litecore {
     }
 
 
+    void SQLiteKeyStore::shareSequencesWith(KeyStore &source) {
+        _sequencesOwner = dynamic_cast<SQLiteKeyStore*>(&source);
+    }
+
+
     sequence_t SQLiteKeyStore::lastSequence() const {
-        if (_lastSequence >= 0)
-            return _lastSequence;
-        sequence_t seq = db().lastSequence(_name);
-        if (db().inTransaction())
-            _lastSequence = seq;
-        return seq;
+        if (_sequencesOwner) {
+            return _sequencesOwner->lastSequence();
+        } else {
+            if (_lastSequence >= 0)
+                return _lastSequence;
+            sequence_t seq = db().lastSequence(_name);
+            if (db().inTransaction())
+                _lastSequence = seq;
+            return seq;
+        }
     }
 
     
     void SQLiteKeyStore::setLastSequence(sequence_t seq) {
-        if (_capabilities.sequences) {
-            _lastSequence = seq;
-            _lastSequenceChanged = true;
+        if (_sequencesOwner) {
+            _sequencesOwner->setLastSequence(seq);
+        } else {
+            if (_capabilities.sequences) {
+                _lastSequence = seq;
+                _lastSequenceChanged = true;
+            }
         }
     }
 
@@ -182,6 +195,7 @@ namespace litecore {
 
     void SQLiteKeyStore::transactionWillEnd(bool commit) {
         if (_lastSequenceChanged) {
+            Assert(!_sequencesOwner);
             if (commit)
                 db().setLastSequence(*this, _lastSequence);
             _lastSequenceChanged = false;
@@ -195,6 +209,10 @@ namespace litecore {
 
         _lastSequence = -1;
         _purgeCountValid = false;
+
+        if (!commit && _uncommittedExpirationColumn)
+            _hasExpirationColumn = false;
+        _uncommittedExpirationColumn = false;
     }
 
 
@@ -205,11 +223,6 @@ namespace litecore {
     static slice textColumnAsSlice(const SQLite::Column &col) {
         return slice(col.getText(nullptr), col.getBytes());
     }
-
-
-    // OPT: Would be nice to avoid copying key/vers/body here; this would require Record to
-    // know that the pointers are ephemeral, and create copies if they're accessed as
-    // alloc_slice (not just slice).
 
 
     // Gets flags from col 1, version from col 3, and body (or its length) from col 4
@@ -390,13 +403,15 @@ namespace litecore {
     }
 
 
+#if ENABLE_DELETE_KEY_STORES
     void SQLiteKeyStore::erase() {
         Transaction t(db());
         db().exec(string("DELETE FROM kv_"+name()));
         setLastSequence(0);
         t.commit();
     }
-
+#endif
+    
 
     void SQLiteKeyStore::createTrigger(string_view triggerName,
                                        string_view triggerSuffix,
@@ -451,13 +466,13 @@ namespace litecore {
         vector<alloc_slice> results(docIDs.size());
         while (stmt.executeStep()) {
             slice docID = columnAsSlice(stmt.getColumn(0));
-            slice revs = textColumnAsSlice(stmt.getColumn(1));
+            slice value = textColumnAsSlice(stmt.getColumn(1));
             size_t i = docIndices[docID];
             //Log("    -- %zu: %.*s --> '%.*s'", i, SPLAT(docID), SPLAT(revs));
-            if (revs.size == 0 && revs.buf != 0)
-                results[i] = empty;
+            if (value.size == 0 && value.buf != 0)
+                results[i] = empty;     // reuse one empty slice instead of creating one per row
             else
-                results[i] = alloc_slice(revs);
+                results[i] = alloc_slice(value);
         }
         return results;
     }
@@ -488,6 +503,7 @@ namespace litecore {
                     "ALTER TABLE kv_@ ADD COLUMN expiration INTEGER; "
                     "CREATE INDEX kv_@_expiration ON kv_@ (expiration) WHERE expiration not null"));
         _hasExpirationColumn = true;
+        _uncommittedExpirationColumn = true;
     }
 
 

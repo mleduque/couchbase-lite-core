@@ -26,6 +26,7 @@
 #include "SQLiteDataFile.hh"
 #include "SQLiteKeyStore.hh"
 #include "SQLite_Internal.hh"
+#include "BothKeyStore.hh"
 #include "Record.hh"
 #include "UnicodeCollator.hh"
 #include "Error.hh"
@@ -63,7 +64,7 @@ namespace litecore {
 
     // Min/max user_version of db files I can read
     static const int kMinUserVersion = 201;
-    static const int kMaxUserVersion = 399;
+    static const int kMaxUserVersion = 499;
 
     // SQLite page size
     static const int64_t kPageSize = 4096;
@@ -90,6 +91,9 @@ namespace litecore {
     // multiple threads from trying to start transactions at once, but another process might
     // open the database and grab the write lock.
     static const unsigned kBusyTimeoutSecs = 10;
+
+    // Name of the KeyStore for deleted documents
+    static const string kDeletedKeyStoreName = "deleted";
 
     LogDomain SQL("SQL", LogLevel::Warning);
 
@@ -200,47 +204,57 @@ namespace litecore {
                      "BEGIN; "
                      "CREATE TABLE IF NOT EXISTS "      // Table of metadata about KeyStores
                      "  kvmeta (name TEXT PRIMARY KEY, lastSeq INTEGER DEFAULT 0, purgeCnt INTEGER DEFAULT 0) WITHOUT ROWID; "
-                     "PRAGMA user_version=302; "
+                     "PRAGMA user_version=400; "
                      "END;"
                      );
+                userVersion = 400;
                 // Create the default KeyStore's table:
                 (void)defaultKeyStore();
             } else if (userVersion < kMinUserVersion) {
                 error::_throw(error::DatabaseTooOld);
-            } else if(userVersion <= 301) {
-                // Add the purgeCnt column to the kvmeta table
-                _exec("BEGIN; "
-                          "ALTER TABLE kvmeta ADD COLUMN purgeCnt INTEGER DEFAULT 0; "
-                          "PRAGMA user_version=302; "
-                          "END;");
             } else if (userVersion > kMaxUserVersion) {
                 error::_throw(error::DatabaseTooNew);
             }
+
+            _exec(format("PRAGMA cache_size=%d; "            // Memory cache
+                         "PRAGMA mmap_size=%d; "             // Memory-mapped reads
+                         "PRAGMA synchronous=normal; "       // Speeds up commits
+                         "PRAGMA journal_size_limit=%lld; "  // Limit WAL disk usage
+                         "PRAGMA case_sensitive_like=true",  // Case sensitive LIKE, for N1QL compat
+                         -(int)kCacheSize/1024, kMMapSize, (long long)kJournalSize));
+
+            // Schema upgrades, now that connection is configured:
+            if (userVersion <= 301) {
+                // Add the purgeCnt column to the kvmeta table
+                if (!options().upgradeable)
+                    error::_throw(error::CantUpgradeDatabase);
+                _exec("BEGIN; "
+                      "ALTER TABLE kvmeta ADD COLUMN purgeCnt INTEGER DEFAULT 0; "
+                      "PRAGMA user_version=302; "
+                      "END;");
+                userVersion = 302;
+            }
+            if (userVersion < 400) {
+                // Migrate deleted docs to separate table:
+                if (!options().upgradeable)
+                    error::_throw(error::CantUpgradeDatabase);
+                logInfo("SCHEMA UPGRADE: Migrating deleted docs to 'dead' KeyStore");
+                (void)defaultKeyStore();    // create the "kv_deleted" table
+                _exec(format("BEGIN;"
+                             "INSERT INTO kv_%s SELECT * FROM kv_%s WHERE (flags&1)!=0;"
+                             "DELETE FROM kv_%s WHERE (flags&1)!=0;"
+                             "PRAGMA user_version=400;"
+                             "END",
+                             kDeletedKeyStoreName.c_str(), kDefaultKeyStoreName.c_str(), 
+                             kDefaultKeyStoreName.c_str()));
+                userVersion = 400;
+            }
         });
 
-        _exec(format("PRAGMA cache_size=%d; "            // Memory cache
-                     "PRAGMA mmap_size=%d; "             // Memory-mapped reads
-                     "PRAGMA synchronous=normal; "       // Speeds up commits
-                     "PRAGMA journal_size_limit=%lld; "  // Limit WAL disk usage
-                     "PRAGMA case_sensitive_like=true",  // Case sensitive LIKE, for N1QL compat
-                     -(int)kCacheSize/1024, kMMapSize, (long long)kJournalSize));
-
-#if DEBUG
-        // Deliberately make unordered queries unpredictable, to expose any LiteCore code that
-        // unintentionally relies on ordering:
-        if (RandomNumber() % 1)
-            _sqlDb->exec("PRAGMA reverse_unordered_selects=1");
-#endif
-
         // Configure number of extra threads to be used by SQLite:
-        int maxThreads = 0;
-#if TARGET_OS_OSX
-        maxThreads = 2;
-        // TODO: Configure for other platforms
-#endif
         auto sqlite = _sqlDb->getHandle();
-        if (maxThreads > 0)
-            sqlite3_limit(sqlite, SQLITE_LIMIT_WORKER_THREADS, maxThreads);
+        if (thread::hardware_concurrency() > 2)
+            sqlite3_limit(sqlite, SQLITE_LIMIT_WORKER_THREADS, 2);
 
         // Register collators, custom functions, and the FTS tokenizer:
         RegisterSQLiteUnicodeCollations(sqlite, _collationContexts);
@@ -417,7 +431,14 @@ namespace litecore {
 
 
     KeyStore* SQLiteDataFile::newKeyStore(const string &name, KeyStore::Capabilities options) {
-        return new SQLiteKeyStore(*this, name, options);
+        Assert(name != kDeletedKeyStoreName); // can't access this store directly
+        auto keyStore = new SQLiteKeyStore(*this, name, options);
+        if (name == kDefaultKeyStoreName) {
+            // Wrap the default store in a BothKeyStore that manages it and the deleted store
+            return new BothKeyStore(keyStore, new SQLiteKeyStore(*this, kDeletedKeyStoreName, options));
+        } else {
+            return keyStore;
+        }
     }
 
 #if ENABLE_DELETE_KEY_STORES
@@ -433,11 +454,6 @@ namespace litecore {
 
 
     void SQLiteDataFile::_endTransaction(Transaction *t, bool commit) {
-        // Notify key-stores so they can save state:
-        forOpenKeyStores([commit](KeyStore &ks) {
-            ((SQLiteKeyStore&)ks).transactionWillEnd(commit);
-        });
-
         exec(commit ? "COMMIT" : "ROLLBACK");
     }
 
