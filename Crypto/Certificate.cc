@@ -40,6 +40,7 @@
 #pragma clang diagnostic pop
 
 #include <stdlib.h>
+#include <algorithm>
 
 namespace litecore { namespace crypto {
     using namespace std;
