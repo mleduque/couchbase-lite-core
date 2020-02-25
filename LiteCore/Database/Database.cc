@@ -147,7 +147,7 @@ namespace c4Internal {
         _encoder.reset(new fleece::impl::Encoder());
         if (options.useDocumentKeys)
             _encoder->setSharedKeys(documentKeys());
-        
+
         if (!(config.flags & kC4DB_NonObservable))
             _sequenceTracker.reset(new access_lock<SequenceTracker>());
 
@@ -427,8 +427,8 @@ namespace c4Internal {
             _housekeeper->stop();
             _housekeeper = nullptr;
         }
-
-        _backgroundDB = nullptr;
+        if (_backgroundDB)
+            _backgroundDB->close();
     }
 
 

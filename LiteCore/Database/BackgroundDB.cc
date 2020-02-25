@@ -56,6 +56,8 @@ namespace litecore {
 
     void BackgroundDB::useInTransaction(TransactionTask task) {
         use([=](DataFile* dataFile) {
+            if (!dataFile)
+                return;
             Transaction t(dataFile);
             SequenceTracker sequenceTracker;
             sequenceTracker.beginTransaction();
