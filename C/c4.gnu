@@ -105,6 +105,7 @@
 		c4query_columnTitle;
 		c4query_run;
 		c4query_explain;
+		c4query_setParameters;
 
 		c4blob_keyFromString;
 		c4blob_keyToString;
