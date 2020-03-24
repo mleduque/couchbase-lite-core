@@ -243,6 +243,17 @@ namespace litecore { namespace repl {
         Assert(_rev->error.code == 0);
         Assert(_rev->deltaSrc || _rev->doc);
         increment(_pendingCallbacks);
+
+        // call the afterPull hook if any
+        if (_options.afterPull) {
+            auto doc = _rev->doc;
+            Value preRoot = doc.root();
+            FLSlice newBody = _options.afterPull(_rev->docID, _rev->revID, _rev->flags, preRoot, _options.callbackContext);
+            // make a copy
+            auto newBodyCopy = FLSlice_Copy(newBody);
+            _rev->doc = Doc(FLDoc_FromResultData(newBodyCopy, kFLUntrusted, doc.sharedKeys(), nullslice), true);
+        }
+
         //Signpost::mark(Signpost::gotRev, _serialNumber);
         _puller->insertRevision(_rev);
     }
