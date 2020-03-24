@@ -120,6 +120,19 @@ extern "C" {
                                                    C4RevisionFlags,
                                                    FLDict body,
                                                    void* context);
+    /** Callback that can process a document body before it's pushed to the remote */
+    typedef FLSlice (*C4ReplicatorBeforePushFunction)(C4String docID,
+                                                   C4String revID,
+                                                   C4RevisionFlags,
+                                                   FLValue body,
+                                                   void *context);
+
+    /** Callback that can process a document after it's pull from the remote and before it's save locally */
+    typedef FLSlice (*C4ReplicatorAfterPullFunction)(C4String docID,
+                                                   C4String revID,
+                                                   C4RevisionFlags,
+                                                   FLValue body,
+                                                   void *context);
 
     /** Checks whether a database name is valid, for purposes of appearing in a replication URL */
     bool c4repl_isValidDatabaseName(C4String dbName) C4API;
