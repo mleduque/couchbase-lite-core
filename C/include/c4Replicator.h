@@ -170,6 +170,8 @@ extern "C" {
         C4ReplicatorStatusChangedCallback   onStatusChanged;   ///< Callback to be invoked when replicator's status changes.
         C4ReplicatorDocumentsEndedCallback  onDocumentsEnded;  ///< Callback notifying status of individual documents
         C4ReplicatorBlobProgressCallback    onBlobProgress;    ///< Callback notifying blob progress
+        C4ReplicatorBeforePushFunction      beforePush;        ///< Callback that can modify a document body before it's pushed
+        C4ReplicatorAfterPullFunction       afterPull;         ///< Callback that can modify a document body after it's pulled
         void*                               callbackContext;   ///< Value to be passed to the callbacks.
         const C4SocketFactory*              socketFactory;     ///< Custom C4SocketFactory, if not NULL
         bool                                dontStart;         ///< Don't start automatically
