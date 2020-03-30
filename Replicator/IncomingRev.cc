@@ -249,9 +249,16 @@ namespace litecore { namespace repl {
             auto doc = _rev->doc;
             Value preRoot = doc.root();
             FLSlice newBody = _options.afterPull(_rev->docID, _rev->revID, _rev->flags, preRoot, _options.callbackContext);
-            // make a copy
-            auto newBodyCopy = FLSlice_Copy(newBody);
-            _rev->doc = Doc(FLDoc_FromResultData(newBodyCopy, kFLUntrusted, doc.sharedKeys(), nullslice), true);
+
+            FLError error = kFLNoError;
+            auto newDoc = FLDoc_FromJSON(newBody, &error);
+
+            if (error != kFLNoError) {
+                logError("Pusher+DB sendRevision beforePush error=%i\n", error);
+                return;
+            }
+            _rev->doc = Doc(newDoc, true);
+            FLDoc_Release(newDoc); // retained by _rev_->doc?
         }
 
         //Signpost::mark(Signpost::gotRev, _serialNumber);
