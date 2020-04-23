@@ -78,7 +78,7 @@ namespace litecore {
 
         /** Adds all sequences in the range [s0...s1), _not including s1_ */
         void add(sequence s0, sequence s1) {
-            assert (s1 >= s0);
+            // assert (s1 >= s0);
             if (s1 > s0) {
                 auto lower = _add(s0);
                 if (s1 > s0 + 1) {
@@ -132,7 +132,7 @@ namespace litecore {
 
         /** Removes all sequences in the range [s0...s1), _not including s1_ */
         void remove(sequence s0, sequence s1) {
-            assert (s1 >= s0);
+            // assert (s1 >= s0);
             if (s1 > s0) {
                 remove(s0);
                 if (s1 > s0 + 1) {
